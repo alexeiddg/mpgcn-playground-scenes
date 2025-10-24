@@ -1,7 +1,6 @@
 pretrained
 visualization
 docs
-data/
 configs
 .DS_Store
 */.DS_Store
@@ -45,10 +44,12 @@ sdist/
 var/
 wheels/
 share/python-wheels/
+data/temp/
 *.egg-info/
 .installed.cfg
 *.egg
 MANIFEST
+
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
