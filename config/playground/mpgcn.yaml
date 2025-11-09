@@ -1,0 +1,8 @@
+# Setting
+gpus: [0]
+seed: 1
+debug: False
+pretrained_path:
+work_dir: ./workdir
+
+# Data Loader

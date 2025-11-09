@@ -1,0 +1,9 @@
+# # Setting
+debug: False
+work_dir: ./workdir
+
+dataset: playground
+dataset_args:
+  num_frame: 48
+  dataset_root_folder: ./data/npy
+  out_folder: ./data/npy

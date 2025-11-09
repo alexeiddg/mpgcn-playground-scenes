@@ -17,7 +17,7 @@ nohup.out
 ft_sync.sh
 .idea
 
-workdir/
+workdir/*.npy
 train*.sh
 
 
@@ -45,6 +45,7 @@ var/
 wheels/
 share/python-wheels/
 data/temp/
+data/npy/*.npy
 *.egg-info/
 .installed.cfg
 *.egg
