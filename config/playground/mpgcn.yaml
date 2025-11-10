@@ -6,3 +6,55 @@ pretrained_path:
 work_dir: ./workdir
 
 # Data Loader
+dataset: playground
+dataset_args:
+  graph: playground-4
+  labeling: intra-inter
+  max_hop: 1
+  inter_link: pairwise
+  dilation: 1
+  hop: 1
+  base: [11, 12]
+  train_batch_size: 8
+  eval_batch_size: 8
+  num_frame: 48
+  window: [0, 48]
+  inputs: JVBM
+  part: body
+  processing: default
+  root_folder: ./data/npy
+  object_folder: ./data/npy
+  person_id: [0, 1, 2, 3]
+  num_object: 0
+
+# Model
+model_type: MPGCN
+model_args:
+  use_att: True
+  kernel_size: [3, 2]
+  dilation: [2, 3]
+  reduct_ratio: 1
+
+# Optimizer
+optimizer: SGD
+optimizer_args:
+  SGD:
+    lr: 0.05
+    momentum: 0.9
+    nesterov: True
+    weight_decay: 0.0002
+  Adam:
+    lr: 0.001
+    betas: [0.9, 0.99]
+    weight_decay: 0.0002
+
+# Scheduler
+lr_scheduler: cosine
+scheduler_args:
+  cosine:
+    max_epoch: 65
+    warm_up: 5
+  step:
+    max_epoch: 70
+    warm_up: 10
+    step_lr: [25, 50]

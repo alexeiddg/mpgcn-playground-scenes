@@ -18,6 +18,7 @@ ft_sync.sh
 .idea
 
 workdir/*.npy
+workdir/*.pkl
 train*.sh
 
 
