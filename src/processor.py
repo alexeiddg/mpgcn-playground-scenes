@@ -16,15 +16,16 @@ class Processor(Initializer):
         self.model.train()
         num_top1, num_sample = 0, 0
         train_iter = tqdm(self.train_loader, dynamic_ncols=True)
-        for num, (x, y, _) in enumerate(train_iter):
+        for num, (x, y, _, area_id) in enumerate(train_iter):
             self.optimizer.zero_grad()
 
             # Using GPU
             x = x.float().to(self.device)
             y = y.long().to(self.device)
+            area_id = area_id.long().to(self.device)
 
             # Calculating Output
-            out, _ = self.model(x)
+            out, _ = self.model(x, area_id)
 
             # Updating Weights
             loss = self.loss_func(out, y)
@@ -69,14 +70,15 @@ class Processor(Initializer):
             num_sample, eval_loss = 0, []
             cm = np.zeros((self.num_class, self.num_class))
             eval_iter = tqdm(self.eval_loader, dynamic_ncols=True)
-            for num, (x, y, name) in enumerate(eval_iter):
+            for num, (x, y, name, area_id) in enumerate(eval_iter):
 
                 # Using GPU
                 x = x.float().to(self.device)
                 y = y.long().to(self.device)
+                area_id = area_id.long().to(self.device)
 
                 # Calculating Output
-                out, _ = self.model(x)
+                out, _ = self.model(x, area_id)
 
                 # Getting Loss
                 loss = self.loss_func(out, y)
@@ -235,12 +237,13 @@ class Processor(Initializer):
         features = []
         labels = []
         with torch.no_grad():
-            for num, (x, y, name) in enumerate(eval_iter):
+            for num, (x, y, name, area_id) in enumerate(eval_iter):
                 names.extend(name)
                 labels.extend(y)
                 x = x.float().to(self.device)
+                area_id = area_id.long().to(self.device)
 
-                dy, feature = self.model(x)
+                dy, feature = self.model(x, area_id)
                 features.extend(feature.detach().cpu().numpy())
                 out.extend(dy.detach().cpu().numpy())
 

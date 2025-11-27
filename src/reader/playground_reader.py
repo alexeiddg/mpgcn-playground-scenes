@@ -1,6 +1,7 @@
 import os
 import pickle
 import json
+import re
 from collections import defaultdict
 
 import numpy as np
@@ -47,11 +48,30 @@ class Playground_Reader:
             'Social_People': 1,
             'Play_Object_Normal': 2,
         }
+        self.area2idx = self._build_area2idx(df["clip_name"])
 
         if split_strategy == "auto":
             self.folds = self._stratified_split(df)
         else:
             raise ValueError("Only stratified split is supported.")
+
+    def _build_area2idx(self, clip_names):
+        areas = []
+        for name in clip_names:
+            m = re.search(r"(hundidocam\d+|columpios[_]?cam\d+|columpios_tierra)", name)
+            token = m.group(1) if m else None
+            if token is None:
+                areas.append("unknown")
+            elif token.startswith("hundidocam"):
+                areas.append("hundido")
+            elif token.startswith("columpios"):
+                areas.append("columpios")
+            else:
+                areas.append("unknown")
+        unique = sorted(set(areas))
+        if "unknown" not in unique:
+            unique.append("unknown")
+        return {area: idx for idx, area in enumerate(unique)}
 
     def _stratified_split(self, df):
         """Create repeated stratified K-fold splits and persist clip lists for reproducibility."""
@@ -161,8 +181,8 @@ class Playground_Reader:
 
     def gendata(self, fold_id, split_map):
         res = {
-            "train": {"pose": [], "obj": [], "labels": []},
-            "eval": {"pose": [], "obj": [], "labels": []},
+            "train": {"pose": [], "obj": [], "labels": [], "areas": []},
+            "eval": {"pose": [], "obj": [], "labels": [], "areas": []},
         }
 
         all_files = os.listdir(self.dataset_root_folder)
@@ -244,6 +264,19 @@ class Playground_Reader:
                 print(f"Skipping {base_name}: label '{label_name}' not in target classes.")
                 continue
 
+            cam_match = re.search(r"(hundidocam\d+|columpios[_]?cam\d+|columpios_tierra)", base_name)
+            if cam_match:
+                token = cam_match.group(1)
+                if token.startswith("hundidocam"):
+                    area_name = "hundido"
+                elif token.startswith("columpios"):
+                    area_name = "columpios"
+                else:
+                    area_name = "unknown"
+            else:
+                area_name = "unknown"
+            area_idx = self.area2idx.get(area_name, self.area2idx.get("unknown", -1))
+
             # Trim or pad to num_frame
             T = min(self.num_frame, pose_data.shape[0], obj_data.shape[0])
             pose_data = pose_data[:T]
@@ -276,6 +309,7 @@ class Playground_Reader:
             res[phase]["pose"].append(pose_data)
             res[phase]["obj"].append(obj_data)
             res[phase]["labels"].append([label_id, base_name])
+            res[phase]["areas"].append(area_idx)
 
         fold_dir = os.path.join(self.out_folder, f"fold_{fold_id:02d}")
         os.makedirs(fold_dir, exist_ok=True)
@@ -286,6 +320,7 @@ class Playground_Reader:
             res_pose = res[phase]["pose"]
             res_obj = res[phase]["obj"]
             labels = res[phase]["labels"]
+            area_ids = res[phase]["areas"]
 
             if not res_pose:
                 print(f"No samples found for {phase} in fold {fold_id:02d}, skipping save.")
@@ -321,6 +356,7 @@ class Playground_Reader:
             np.save(os.path.join(fold_dir, f"{phase}_object_data.npy"), res_obj)
             with open(os.path.join(fold_dir, f"{phase}_label.pkl"), "wb") as f:
                 pickle.dump(labels, f)
+            np.save(os.path.join(fold_dir, f"{phase}_area.npy"), np.array(area_ids, dtype=np.int64))
 
             label_ids = [lbl for lbl, _ in labels]
             fold_counts[phase] = self._count_labels(label_ids)
@@ -331,6 +367,9 @@ class Playground_Reader:
 
     def start(self):
         print("Starting dataset build from CSV with repeated stratified K-folds...")
+        os.makedirs(self.out_folder, exist_ok=True)
+        with open(os.path.join(self.out_folder, "area2idx.json"), "w") as f:
+            json.dump(self.area2idx, f, indent=2)
         fold_summaries = {}
         for fold_id, split_map in enumerate(self.folds):
             counts = self.gendata(fold_id, split_map)

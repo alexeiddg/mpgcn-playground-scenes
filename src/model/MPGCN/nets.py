@@ -26,10 +26,15 @@ class Input_Branch(nn.Module):
         return x
 
 class MPGCN(nn.Module):
-    def __init__(self, data_shape, num_class, A, **kwargs):
+    def __init__(self, data_shape, num_class, A, num_areas=2, area_emb_dim=32, **kwargs):
         super(MPGCN, self).__init__()
 
         num_input, num_channel, _, _, _ = data_shape
+        self.num_input = num_input
+        self.num_areas = num_areas
+        self.area_emb_dim = area_emb_dim
+
+        self.area_emb = nn.Embedding(self.num_areas, self.area_emb_dim)
 
         # input branches
         self.input_branches = nn.ModuleList([
@@ -39,7 +44,7 @@ class MPGCN(nn.Module):
 
         # main stream
         module_list = [
-            Basic_Block(32*num_input, 128, A, stride=2, **kwargs),
+            Basic_Block(32*num_input + self.area_emb_dim, 128, A, stride=2, **kwargs),
             Basic_Block(128, 128, A, **kwargs),
             Basic_Block(128, 128, A, **kwargs),
             Basic_Block(128, 256, A, stride=2, **kwargs),
@@ -56,7 +61,7 @@ class MPGCN(nn.Module):
         init_param(self.modules())
         zero_init_lastBN(self.modules())
 
-    def forward(self, x):
+    def forward(self, x, area_id):
 
         N, I, C, T, V, M = x.size()
 
@@ -65,6 +70,16 @@ class MPGCN(nn.Module):
         for i, branch in enumerate(self.input_branches):
             x_cat.append(branch(x[:,i,:,:,:,:]))
         x = torch.cat(x_cat, dim=1)
+
+        # area embedding injection via channel concatenation
+        T, V = x.shape[2], x.shape[3]
+        x = x.view(N, M, x.shape[1], T, V)
+        area_vec = self.area_emb(area_id)  # (N, emb_dim)
+        area_vec = area_vec.unsqueeze(1).expand(-1, M, -1)  # (N, M, emb_dim)
+        area_vec = area_vec.contiguous().view(N * M, self.area_emb_dim, 1, 1)
+        area_vec = area_vec.expand(-1, -1, T, V)
+        x = x.view(N * M, x.shape[2], T, V)
+        x = torch.cat([x, area_vec], dim=1)
 
         # main stream
         for layer in self.main_stream:

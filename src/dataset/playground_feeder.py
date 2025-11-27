@@ -1,11 +1,31 @@
 import logging
 import os
 import pickle
+import re
 import numpy as np
 from torch.utils.data import Dataset
 
 from .utils import graph_processing, multi_input
 from .augment import SkeletonAugmenter
+
+
+AREA_TO_ID = {
+    "hundido": 0,
+    "columpios": 1,
+    "unknown": 2,
+}
+
+
+def extract_area_name(clip_name):
+    m = re.search(r"(hundidocam\d+|columpios[_]?cam\d+|columpios_tierra)", clip_name)
+    if not m:
+        return "unknown"
+    token = m.group(1)
+    if token.startswith("hundidocam"):
+        return "hundido"
+    if token.startswith("columpios"):
+        return "columpios"
+    return "unknown"
 
 
 class Playground_Feeder(Dataset):
@@ -59,6 +79,13 @@ class Playground_Feeder(Dataset):
                 self.object_data = np.load(object_path, mmap_mode='r')
             else:
                 self.object_data = None
+            area_path = os.path.join(self.object_folder, f'{phase}_area.npy')
+            if os.path.exists(area_path):
+                self.area_ids = np.load(area_path, mmap_mode='r')
+                if len(self.area_ids) != len(self.label):
+                    raise ValueError('Area id count does not match labels for phase {}'.format(phase))
+            else:
+                self.area_ids = None
         except Exception as exc:
             logging.error('Error loading dataset splits: {}'.format(exc))
             raise
@@ -184,7 +211,12 @@ class Playground_Feeder(Dataset):
                 raise ValueError('Critical shape mismatch that cannot be automatically fixed.')
 
         label, name = self.label[idx]
-        return data_new, label, name
+        if self.area_ids is not None:
+            area_id = int(self.area_ids[idx])
+        else:
+            area_name = extract_area_name(name)
+            area_id = AREA_TO_ID.get(area_name, AREA_TO_ID["unknown"])
+        return data_new, label, name, area_id
 
     def get_datashape(self):
         I = len(self.inputs) if self.inputs.isupper() else 1

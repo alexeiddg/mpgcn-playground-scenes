@@ -84,9 +84,15 @@ class Initializer():
         self.feeders, self.data_shape, self.num_class, self.A, self.parts = dataset.create(
             self.args.dataset, **dataset_args
         )
+        train_area_ids = getattr(self.feeders['train'], 'area_ids', None)
+        if train_area_ids is not None:
+            self.num_areas = int(np.max(train_area_ids)) + 1
+        else:
+            self.num_areas = getattr(self.args, "num_areas", None) \
+                or self.args.model_args.get("num_areas", 2)
 
         train_labels = []
-        for _, y, _ in self.feeders['train']:
+        for _, y, _, _ in self.feeders['train']:
             train_labels.append(int(y))
 
         train_labels = np.array(train_labels)
@@ -134,6 +140,7 @@ class Initializer():
             'num_class': self.num_class,
             'A': torch.Tensor(self.A),
             'parts': self.parts,
+            'num_areas': self.num_areas,
         }
         self.model = model.create(self.args.model_type, **(self.args.model_args), **kwargs)
         head_out = getattr(self.model, 'fcn', None)
@@ -185,7 +192,7 @@ class Initializer():
         train_labels = []
         train_feeder = self.feeders['train']
 
-        for _, y, _ in train_feeder:
+        for _, y, _, _ in train_feeder:
             train_labels.append(int(y))
 
         train_labels = np.array(train_labels)
