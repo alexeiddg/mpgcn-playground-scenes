@@ -4,7 +4,7 @@
 
 ## **What We’ll Do and Why**
 
-We’ll classify **one label per scene** in playground scenes (Transit, Social_People, Play_Object_Normal, Play_Object_Risk, Adult_Assisting, Negative_Contact) using **2D skeletons** and a **person–object panoramic graph** (**MP-GCN**).
+We’ll classify **one label per scene** in playground scenes (Transit, Social_People, Play_Object_Normal) using **2D skeletons** and a **person–object panoramic graph** (**MP-GCN**).
 
 MP-GCN models **interactions**: _intra-person_ (body topology), _person↔object_ (hands↔swing/hill), and _inter-person_ (pelvis↔pelvis). It’s **lightweight**, **privacy-friendly**, and captures **risk/furniture use** better than a per-person attention model.
 - **Reference repo:** [MP-GCN](https://github.com/mgiant/MP-GCN)
@@ -22,3 +22,6 @@ MP-GCN models **interactions**: _intra-person_ (body topology), _person↔object
     - **Adjacencies:** A0 (self), A_intra (human + **obj↔hands**), A_inter (**pelvis↔pelvis**)
 
 ---
+
+
+changes: TODO: describe new split strat

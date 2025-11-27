@@ -1,10 +1,12 @@
 import os
 import pickle
+import json
 from collections import defaultdict
 
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+from sklearn.model_selection import RepeatedStratifiedKFold
 
 from .select_top_m_people import select_top_m_people
 
@@ -34,21 +36,89 @@ class Playground_Reader:
         df["clip_name"] = df["trimmed_name"].str.replace(".mp4", "", regex=False)
         self.df = df
 
+        # Drop sparse/unused categories before building label maps
+        excluded_labels = {"Negative_Contact", "Play_Object_Risk", "No_Activity", "Adult_Assisting"}
+        df = df[~df["activity_label"].isin(excluded_labels)].copy()
+        self.excluded_labels = excluded_labels - {"Negative_Contact"}
         self.label_map = dict(zip(df["clip_name"], df["activity_label"]))
 
         self.class2idx = {
             'Transit': 0,
             'Social_People': 1,
             'Play_Object_Normal': 2,
-            'Play_Object_Risk': 3,
-            'Adult_Assisting': 4,
-            'Negative_Contact': 5,
-            'No_Activity': 6
         }
 
         if split_strategy == "auto":
-            df["split"] = df["camera"].apply(lambda c: "eval" if "cam4" in str(c) else "train")
-        self.split_map = dict(zip(df["clip_name"], df["split"]))
+            self.folds = self._stratified_split(df)
+        else:
+            raise ValueError("Only stratified split is supported.")
+
+    def _stratified_split(self, df):
+        """Create repeated stratified K-fold splits and persist clip lists for reproducibility."""
+
+        clip_names = df["clip_name"].tolist()
+        labels = df["activity_label"].map(self.class2idx).tolist()
+
+        # Basic sanity check to ensure stratification can work
+        class_counts = pd.Series(labels).value_counts()
+        min_count = class_counts.min()
+        n_splits = 5
+        if min_count < n_splits:
+            raise ValueError(
+                f"Not enough samples per class for {n_splits} folds. "
+                f"Lowest class count: {min_count}"
+            )
+
+        rskf = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=5, random_state=42)
+        folds = []
+        summary = {}
+
+        os.makedirs(self.out_folder, exist_ok=True)
+
+        for fold_id, (train_idx, eval_idx) in enumerate(rskf.split(clip_names, labels)):
+            train_clips = [clip_names[i] for i in train_idx]
+            eval_clips = [clip_names[i] for i in eval_idx]
+
+            # Save fold membership for downstream reproducibility
+            with open(os.path.join(self.out_folder, f"fold_{fold_id:02d}_train.txt"), "w") as f:
+                f.write("\n".join(train_clips))
+            with open(os.path.join(self.out_folder, f"fold_{fold_id:02d}_eval.txt"), "w") as f:
+                f.write("\n".join(eval_clips))
+
+            fold_map = {name: "train" for name in train_clips}
+            fold_map.update({name: "eval" for name in eval_clips})
+            folds.append(fold_map)
+
+            # Track counts per class for both splits
+            train_labels = [labels[i] for i in train_idx]
+            eval_labels = [labels[i] for i in eval_idx]
+            counts = {
+                "train": self._count_labels(train_labels),
+                "eval": self._count_labels(eval_labels),
+            }
+
+            missing_classes = [
+                lbl for lbl, idx in self.class2idx.items()
+                if counts["train"].get(lbl, 0) == 0 or counts["eval"].get(lbl, 0) == 0
+            ]
+            if missing_classes:
+                raise ValueError(
+                    f"Fold {fold_id} is missing classes in train/eval: {missing_classes}"
+                )
+
+            summary[f"fold_{fold_id:02d}"] = counts
+
+        with open(os.path.join(self.out_folder, "fold_summary.json"), "w") as f:
+            json.dump(summary, f, indent=2)
+
+        return folds
+
+    def _count_labels(self, label_ids):
+        inv_map = {v: k for k, v in self.class2idx.items()}
+        counts = {name: 0 for name in self.class2idx.keys()}
+        for lid in label_ids:
+            counts[inv_map[lid]] = counts.get(inv_map[lid], 0) + 1
+        return counts
 
     def _get_max_object_count(self, phase_dir, obj_files):
         n_obj_max = 0
@@ -89,8 +159,11 @@ class Playground_Reader:
             obj = obj[..., :self.max_channel]
         return obj.astype(np.float32)
 
-    def gendata(self, phase):
-        res_pose, res_obj, labels = [], [], []
+    def gendata(self, fold_id, split_map):
+        res = {
+            "train": {"pose": [], "obj": [], "labels": []},
+            "eval": {"pose": [], "obj": [], "labels": []},
+        }
 
         all_files = os.listdir(self.dataset_root_folder)
         pose_files = []
@@ -128,7 +201,7 @@ class Playground_Reader:
 
         matched_obj_files = sorted(set(matched_obj_files))
 
-        print(f"\nGenerating {phase} split...")
+        print(f"\nGenerating fold {fold_id:02d} splits...")
 
         n_obj_max = self._get_max_object_count(self.dataset_root_folder, matched_obj_files) \
             if self.n_obj_max is None else self.n_obj_max
@@ -136,7 +209,8 @@ class Playground_Reader:
 
         for pose_file in tqdm(pose_files):
             base_name = pose_file.replace("_data.npy", "")
-            if self.split_map.get(base_name, "train") != phase:
+            phase = split_map.get(base_name)
+            if phase not in {"train", "eval"}:
                 continue
 
             pose_path = os.path.join(self.dataset_root_folder, pose_file)
@@ -160,8 +234,15 @@ class Playground_Reader:
             obj_arrays = [arr[:min_frames] for arr in obj_arrays]
             obj_data = np.concatenate(obj_arrays, axis=1) if len(obj_arrays) > 1 else obj_arrays[0]
 
-            label_name = self.label_map.get(base_name, "No_Activity")
-            label_id = self.class2idx.get(label_name, self.class2idx["No_Activity"])
+            label_name = self.label_map.get(base_name)
+            if label_name is None:
+                print(f"Skipping {base_name}: missing label or excluded class.")
+                continue
+
+            label_id = self.class2idx.get(label_name)
+            if label_id is None:
+                print(f"Skipping {base_name}: label '{label_name}' not in target classes.")
+                continue
 
             # Trim or pad to num_frame
             T = min(self.num_frame, pose_data.shape[0], obj_data.shape[0])
@@ -192,45 +273,70 @@ class Playground_Reader:
                 fixed_obj_data[:t_range, :n_range, :c_range] = obj_data[:t_range, :n_range, :c_range]
                 obj_data = fixed_obj_data
 
-            res_pose.append(pose_data)
-            res_obj.append(obj_data)
-            labels.append([label_id, base_name])
+            res[phase]["pose"].append(pose_data)
+            res[phase]["obj"].append(obj_data)
+            res[phase]["labels"].append([label_id, base_name])
 
-        shapes = [r.shape for r in res_obj]
-        print(f"Unique object shapes found for {phase}: {set(shapes)}")
+        fold_dir = os.path.join(self.out_folder, f"fold_{fold_id:02d}")
+        os.makedirs(fold_dir, exist_ok=True)
 
-        try:
-            res_pose = np.array(res_pose, dtype=np.float32)
-            res_obj = np.array(res_obj, dtype=np.float32)
-        except ValueError as e:
-            print(f"⚠️ Error converting to numpy array: {e}")
-            print("Attempting to fix inconsistent shapes...")
+        fold_counts = {}
 
-            expected_pose_shape = (self.num_frame, self.max_person, self.max_joint, self.max_channel)
-            expected_obj_shape = (self.num_frame, n_obj_max, self.max_channel)
+        for phase in ["train", "eval"]:
+            res_pose = res[phase]["pose"]
+            res_obj = res[phase]["obj"]
+            labels = res[phase]["labels"]
 
-            for i, obj in enumerate(res_obj):
-                if obj.shape != expected_obj_shape:
-                    print(f"Fixing inconsistent shape at index {i}: {obj.shape} → {expected_obj_shape}")
-                    fixed_obj = np.zeros(expected_obj_shape)
-                    t_range = min(obj.shape[0], expected_obj_shape[0])
-                    n_range = min(obj.shape[1], expected_obj_shape[1])
-                    c_range = min(obj.shape[2], expected_obj_shape[2])
-                    fixed_obj[:t_range, :n_range, :c_range] = obj[:t_range, :n_range, :c_range]
-                    res_obj[i] = fixed_obj
+            if not res_pose:
+                print(f"No samples found for {phase} in fold {fold_id:02d}, skipping save.")
+                continue
 
-            res_pose = np.array(res_pose, dtype=np.float32)
-            res_obj = np.array(res_obj, dtype=np.float32)
+            shapes = [r.shape for r in res_obj]
+            print(f"Unique object shapes found for fold {fold_id:02d} {phase}: {set(shapes)}")
 
-        os.makedirs(self.out_folder, exist_ok=True)
-        np.save(os.path.join(self.out_folder, f"{phase}_data.npy"), res_pose)
-        np.save(os.path.join(self.out_folder, f"{phase}_object_data.npy"), res_obj)
-        with open(os.path.join(self.out_folder, f"{phase}_label.pkl"), "wb") as f:
-            pickle.dump(labels, f)
+            try:
+                res_pose = np.array(res_pose, dtype=np.float32)
+                res_obj = np.array(res_obj, dtype=np.float32)
+            except ValueError as e:
+                print(f"⚠️ Error converting to numpy array: {e}")
+                print("Attempting to fix inconsistent shapes...")
 
-        print(f"{phase.capitalize()} set saved → {self.out_folder}")
+                expected_pose_shape = (self.num_frame, self.max_person, self.max_joint, self.max_channel)
+                expected_obj_shape = (self.num_frame, n_obj_max, self.max_channel)
+
+                for i, obj in enumerate(res_obj):
+                    if obj.shape != expected_obj_shape:
+                        print(f"Fixing inconsistent shape at index {i}: {obj.shape} → {expected_obj_shape}")
+                        fixed_obj = np.zeros(expected_obj_shape)
+                        t_range = min(obj.shape[0], expected_obj_shape[0])
+                        n_range = min(obj.shape[1], expected_obj_shape[1])
+                        c_range = min(obj.shape[2], expected_obj_shape[2])
+                        fixed_obj[:t_range, :n_range, :c_range] = obj[:t_range, :n_range, :c_range]
+                        res_obj[i] = fixed_obj
+
+                res_pose = np.array(res_pose, dtype=np.float32)
+                res_obj = np.array(res_obj, dtype=np.float32)
+
+            np.save(os.path.join(fold_dir, f"{phase}_data.npy"), res_pose)
+            np.save(os.path.join(fold_dir, f"{phase}_object_data.npy"), res_obj)
+            with open(os.path.join(fold_dir, f"{phase}_label.pkl"), "wb") as f:
+                pickle.dump(labels, f)
+
+            label_ids = [lbl for lbl, _ in labels]
+            fold_counts[phase] = self._count_labels(label_ids)
+
+            print(f"{phase.capitalize()} set saved → {fold_dir}")
+
+        return fold_counts
 
     def start(self):
-        print("Starting dataset build from CSV...")
-        for phase in ["train", "eval"]:
-            self.gendata(phase)
+        print("Starting dataset build from CSV with repeated stratified K-folds...")
+        fold_summaries = {}
+        for fold_id, split_map in enumerate(self.folds):
+            counts = self.gendata(fold_id, split_map)
+            fold_summaries[f"fold_{fold_id:02d}"] = counts
+
+        summary_path = os.path.join(self.out_folder, "fold_summary_actual.json")
+        with open(summary_path, "w") as f:
+            json.dump(fold_summaries, f, indent=2)
+        print(f"Saved fold class distribution summary → {summary_path}")

@@ -1,6 +1,6 @@
 import os, yaml, warnings, logging, torch, numpy as np
 from copy import deepcopy
-from tensorboardX import SummaryWriter
+from torch.utils.tensorboard import SummaryWriter
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from fvcore.nn import FlopCountAnalysis
@@ -76,14 +76,48 @@ class Initializer():
         dataset_name = self.args.dataset.split('-')[0]
         dataset_args = self.args.dataset_args
         dataset_args['debug'] = self.args.debug
+        dataset_args.setdefault('augment', True)
+        if self.args.debug:
+            dataset_args['augment'] = False
         self.train_batch_size = dataset_args['train_batch_size']
         self.eval_batch_size = dataset_args['eval_batch_size']
         self.feeders, self.data_shape, self.num_class, self.A, self.parts = dataset.create(
             self.args.dataset, **dataset_args
         )
+
+        train_labels = []
+        for _, y, _ in self.feeders['train']:
+            train_labels.append(int(y))
+
+        train_labels = np.array(train_labels)
+
+        # Class frequencies
+        observed_classes = int(train_labels.max()) + 1 if train_labels.size else self.num_class
+        if observed_classes != self.num_class:
+            logging.warning(
+                'Adjusting num_class from {} to {} based on observed train labels.'.format(
+                    self.num_class, observed_classes
+                )
+            )
+            self.num_class = observed_classes
+
+        class_counts = np.bincount(train_labels, minlength=self.num_class) + 1e-6
+        class_weights = 1.0 / class_counts
+
+        # Weight per sample
+        sample_weights = class_weights[train_labels]
+        sample_weights = torch.tensor(sample_weights, dtype=torch.float32)
+
+        from torch.utils.data import WeightedRandomSampler
+        train_sampler = WeightedRandomSampler(
+            weights=sample_weights,
+            num_samples=len(sample_weights),
+            replacement=True
+        )
+
         self.train_loader = DataLoader(self.feeders['train'],
             batch_size=self.train_batch_size, num_workers=4*len(self.args.gpus),
-            pin_memory=True, shuffle=True, drop_last=True
+            pin_memory=True, sampler=train_sampler, shuffle=False, drop_last=True
         )
         self.eval_loader = DataLoader(self.feeders['eval'],
             batch_size=self.eval_batch_size, num_workers=4*len(self.args.gpus),
@@ -102,15 +136,18 @@ class Initializer():
             'parts': self.parts,
         }
         self.model = model.create(self.args.model_type, **(self.args.model_args), **kwargs)
+        head_out = getattr(self.model, 'fcn', None)
+        if head_out is not None and hasattr(head_out, 'out_features'):
+            logging.info('Classifier head out_features: {}'.format(head_out.out_features))
         logging.info('Model: {} {}'.format(self.args.model_type, self.args.model_args))
         with open('{}/model.txt'.format(self.save_dir), 'w') as f:
             print(self.model, file=f)
-            
+
         flops = FlopCountAnalysis(deepcopy(self.model), inputs=torch.rand([1]+self.data_shape))
         flops.unsupported_ops_warnings(False)
         params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         logging.info('Model profile: {:.2f}G FLOPs and {:.2f}M Parameters'.format(flops.total() / 1e9 , params / 1e6))
-        
+
         self.model = torch.nn.DataParallel(
             self.model.to(self.device), device_ids=self.args.gpus, output_device=self.output_device
         )
@@ -145,5 +182,24 @@ class Initializer():
         logging.info('LR_Scheduler: {} {}'.format(self.args.lr_scheduler, scheduler_args))
 
     def init_loss_func(self):
-        self.loss_func = torch.nn.CrossEntropyLoss().to(self.device)
-        logging.info('Loss function: {}'.format(self.loss_func.__class__.__name__))
+        train_labels = []
+        train_feeder = self.feeders['train']
+
+        for _, y, _ in train_feeder:
+            train_labels.append(int(y))
+
+        train_labels = np.array(train_labels)
+
+        class_counts = np.bincount(train_labels, minlength=self.num_class)
+        class_counts = class_counts + 1e-6
+
+        class_weights = 1.0 / class_counts
+        class_weights = class_weights * (self.num_class / class_weights.sum())
+
+        weight_tensor = torch.tensor(class_weights, dtype=torch.float32).to(self.device)
+
+        self.loss_func = torch.nn.CrossEntropyLoss(weight=weight_tensor).to(self.device)
+
+        logging.info(
+            f'Loss function: {self.loss_func.__class__.__name__} with class weights: {class_weights.tolist()}'
+        )

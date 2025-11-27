@@ -7,7 +7,7 @@ from .graphs import Graph
 from .playground_feeder import Playground_Feeder
 
 __data_args = {
-    'playground': {'class': 6, 'feeder': Playground_Feeder},
+    'playground': {'class': 3, 'feeder': Playground_Feeder},
 }
 
 

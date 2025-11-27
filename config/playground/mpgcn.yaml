@@ -22,8 +22,8 @@ dataset_args:
   inputs: JVBM
   part: body
   processing: default
-  root_folder: ./data/npy
-  object_folder: ./data/npy
+  root_folder: ./workdir/fold_{ID}
+  object_folder: ./workdir/fold_{ID}
   person_id: [0, 1, 2, 3]
   num_object: 0
 

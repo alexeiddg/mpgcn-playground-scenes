@@ -19,7 +19,10 @@ ft_sync.sh
 
 workdir/*.npy
 workdir/*.pkl
+workdir
 train*.sh
+data/npy
+AGENTS.md
 
 
 # Byte-compiled / optimized / DLL files
