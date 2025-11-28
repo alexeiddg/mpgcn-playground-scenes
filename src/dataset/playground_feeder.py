@@ -10,9 +10,8 @@ from .augment import SkeletonAugmenter
 
 
 AREA_TO_ID = {
-    "hundido": 0,
-    "columpios": 1,
-    "unknown": 2,
+    "columpios": 0,
+    "unknown": 1,
 }
 
 
@@ -21,10 +20,9 @@ def extract_area_name(clip_name):
     if not m:
         return "unknown"
     token = m.group(1)
-    if token.startswith("hundidocam"):
-        return "hundido"
     if token.startswith("columpios"):
         return "columpios"
+    # hundido and anything else collapse to unknown
     return "unknown"
 
 

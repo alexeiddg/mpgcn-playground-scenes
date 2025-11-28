@@ -91,6 +91,12 @@ class Initializer():
             self.num_areas = getattr(self.args, "num_areas", None) \
                 or self.args.model_args.get("num_areas", 2)
 
+        hem_cfg = getattr(self.args, "hem", {}) or {}
+        self.hem_enabled = hem_cfg.get("enabled", False)
+        self.hem_mode = hem_cfg.get("mode", "top_p")
+        self.hem_value = hem_cfg.get("value", 0.3)
+        self.hem_min_samples = hem_cfg.get("min_samples", 1)
+
         train_labels = []
         for _, y, _, _ in self.feeders['train']:
             train_labels.append(int(y))
@@ -205,7 +211,8 @@ class Initializer():
 
         weight_tensor = torch.tensor(class_weights, dtype=torch.float32).to(self.device)
 
-        self.loss_func = torch.nn.CrossEntropyLoss(weight=weight_tensor).to(self.device)
+        # Enable per-sample losses for HEM while keeping weights
+        self.loss_func = torch.nn.CrossEntropyLoss(weight=weight_tensor, reduction='none').to(self.device)
 
         logging.info(
             f'Loss function: {self.loss_func.__class__.__name__} with class weights: {class_weights.tolist()}'

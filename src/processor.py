@@ -1,5 +1,6 @@
 import logging
 import os
+import math
 import torch
 import pickle
 import numpy as np
@@ -15,6 +16,7 @@ class Processor(Initializer):
     def train(self, epoch):
         self.model.train()
         num_top1, num_sample = 0, 0
+        hem_selected_total, hem_loss_total, hem_batches = 0, 0.0, 0
         train_iter = tqdm(self.train_loader, dynamic_ncols=True)
         for num, (x, y, _, area_id) in enumerate(train_iter):
             self.optimizer.zero_grad()
@@ -27,8 +29,21 @@ class Processor(Initializer):
             # Calculating Output
             out, _ = self.model(x, area_id)
 
-            # Updating Weights
-            loss = self.loss_func(out, y)
+            # Per-sample loss for hard example mining
+            per_sample_loss = self.loss_func(out, y)  # shape (N,)
+            selected_loss = per_sample_loss
+            hem_info = ""
+            if getattr(self, "hem_enabled", False):
+                selected_idx = self._select_hard_samples(per_sample_loss, out, y)
+                if selected_idx.numel() > 0:
+                    selected_loss = per_sample_loss[selected_idx]
+                else:
+                    selected_loss = per_sample_loss
+                hem_info = f"HEM active: {self.hem_mode}={self.hem_value} -> selected {selected_loss.numel()} / {per_sample_loss.numel()}"
+                hem_selected_total += selected_loss.numel()
+                hem_loss_total += selected_loss.mean().item()
+                hem_batches += 1
+            loss = selected_loss.mean()
             loss.backward()
             self.optimizer.step()
             self.scheduler.step()
@@ -47,8 +62,10 @@ class Processor(Initializer):
                 self.scalar_writer.add_scalar(
                     'train_loss', loss.item(), self.global_step)
                 
-            train_iter.set_description(
-                'Loss: {:.4f}, LR: {:.4f}'.format(loss.item(), lr))
+            desc = 'Loss: {:.4f}, LR: {:.4f}'.format(loss.item(), lr)
+            if hem_info:
+                desc += f' | {hem_info}'
+            train_iter.set_description(desc)
 
         # Showing Train Results
         train_acc = num_top1 / num_sample
@@ -59,6 +76,13 @@ class Processor(Initializer):
             epoch +
             1, self.max_epoch, num_top1, num_sample, train_acc
         ))
+        if getattr(self, "hem_enabled", False):
+            mean_hard_loss = hem_loss_total / hem_batches if hem_batches else 0.0
+            logging.info(
+                'HEM stats - mode: {}, value: {}, batches: {}, selected: {}, mean hard loss: {:.4f}'.format(
+                    self.hem_mode, self.hem_value, hem_batches, hem_selected_total, mean_hard_loss
+                )
+            )
         logging.info('')
 
     def eval(self, save_score=True):
@@ -81,7 +105,8 @@ class Processor(Initializer):
                 out, _ = self.model(x, area_id)
 
                 # Getting Loss
-                loss = self.loss_func(out, y)
+                per_sample_loss = self.loss_func(out, y)
+                loss = per_sample_loss.mean()
                 eval_loss.append(loss.item())
 
                 if save_score:
@@ -130,6 +155,40 @@ class Processor(Initializer):
         torch.cuda.empty_cache()
 
         return acc_top1, acc_top5, cm, score
+
+    def _select_hard_samples(self, per_sample_loss, logits, targets):
+        """Return indices of hard samples according to configured HEM mode."""
+        mode = getattr(self, "hem_mode", "top_p")
+        value = getattr(self, "hem_value", 0.3)
+        min_samples = getattr(self, "hem_min_samples", 1)
+
+        batch_size = per_sample_loss.numel()
+        if batch_size == 0:
+            return torch.arange(0, 0, device=per_sample_loss.device)
+
+        if mode == "hard_negative_only":
+            preds = logits.detach().argmax(dim=1)
+            mask = preds != targets
+            idx = torch.nonzero(mask, as_tuple=False).squeeze(1)
+            if idx.numel() == 0:
+                return torch.arange(min(batch_size, min_samples), device=per_sample_loss.device)
+            return idx
+
+        if mode == "top_k":
+            k = int(value)
+            if k <= 0:
+                k = min_samples
+            k = min(max(k, min_samples), batch_size)
+            topk = torch.topk(per_sample_loss, k, largest=True, sorted=False).indices
+            return topk
+
+        # default: top_p
+        frac = float(value)
+        frac = max(0.0, min(1.0, frac))
+        k = int(math.ceil(batch_size * frac))
+        k = min(max(k, min_samples), batch_size)
+        topk = torch.topk(per_sample_loss, k, largest=True, sorted=False).indices
+        return topk
 
     def start(self):
         start_time = time()

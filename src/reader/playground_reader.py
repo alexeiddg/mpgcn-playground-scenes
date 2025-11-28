@@ -62,8 +62,6 @@ class Playground_Reader:
             token = m.group(1) if m else None
             if token is None:
                 areas.append("unknown")
-            elif token.startswith("hundidocam"):
-                areas.append("hundido")
             elif token.startswith("columpios"):
                 areas.append("columpios")
             else:
@@ -74,8 +72,6 @@ class Playground_Reader:
         return {area: idx for idx, area in enumerate(unique)}
 
     def _stratified_split(self, df):
-        """Create repeated stratified K-fold splits and persist clip lists for reproducibility."""
-
         clip_names = df["clip_name"].tolist()
         labels = df["activity_label"].map(self.class2idx).tolist()
 
@@ -267,9 +263,7 @@ class Playground_Reader:
             cam_match = re.search(r"(hundidocam\d+|columpios[_]?cam\d+|columpios_tierra)", base_name)
             if cam_match:
                 token = cam_match.group(1)
-                if token.startswith("hundidocam"):
-                    area_name = "hundido"
-                elif token.startswith("columpios"):
+                if token.startswith("columpios"):
                     area_name = "columpios"
                 else:
                     area_name = "unknown"
