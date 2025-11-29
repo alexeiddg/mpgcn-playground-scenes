@@ -35,15 +35,10 @@ def multi_input(data, conn, inputs, centers):
         center = centers[i]
         if center >= 0:
             joint[C:, :, i, :] = data[:, :, i, :] - data[:, :, center, :]
-    for i in range(T - 2):
-        joint_motion[:C, i, :, :] = data[:, i + 1, :, :] - data[:, i, :, :]
-        joint_motion[C:, i, :, :] = data[:, i + 2, :, :] - data[:, i, :, :]
+
     for i in range(len(conn)):
         if conn[i] >= 0:
             bone[:C, :, i, :] = data[:, :, i, :] - data[:, :, conn[i], :]
-    for i in range(T - 2):
-        bone_motion[:C, i, :, :] = bone[:C, i + 1, :, :] - bone[:C, i, :, :]
-        bone_motion[C:, i, :, :] = bone[:C, i + 2, :, :] - bone[:C, i, :, :]
     bone_length = 0
     for i in range(C):
         bone_length += bone[i, :, :, :] ** 2
@@ -51,27 +46,49 @@ def multi_input(data, conn, inputs, centers):
     for i in range(C):
         bone[C + i, :, :, :] = np.arccos(np.clip(bone[i, :, :, :] / bone_length, -1.0, 1.0))
 
-    data_new = []
-    if inputs.isupper():
-        if 'J' in inputs:
-            data_new.append(joint)
-        if 'V' in inputs:
-            data_new.append(joint_motion)
-        if 'B' in inputs:
-            data_new.append(bone)
-        if 'M' in inputs:
-            data_new.append(bone_motion)
-    elif inputs == 'joint':
-        data_new = [joint[:C, :, :, :]]
-    elif inputs == 'bone':
-        data_new = [bone[:C, :, :, :]]
-    elif inputs == 'motion':
-        data_new = [joint_motion[:C, :, :, :]]
-    elif inputs == 'bone_motion':
-        data_new = [bone_motion[:C, :, :, :]]
-    else:
-        logging.info('')
-        logging.error('Error: No input feature!')
-        raise ValueError()
-    return np.stack(data_new, axis=0)
+    # Joint motion: J(t+1)-J(t), pad first frame with zeros
+    joint_motion[:C, 1:, :, :] = joint[:C, 1:, :, :] - joint[:C, :-1, :, :]
+    # replicate to the second half
+    joint_motion[C:, :, :, :] = joint_motion[:C, :, :, :]
 
+    # Bone motion: B(t+1)-B(t), pad first frame with zeros
+    bone_motion[:C, 1:, :, :] = bone[:C, 1:, :, :] - bone[:C, :-1, :, :]
+    bone_motion[C:, :, :, :] = bone_motion[:C, :, :, :]
+
+    streams = {
+        "J": joint,
+        "JM": joint_motion,
+        "B": bone,
+        "BM": bone_motion,
+    }
+    alias_map = {
+        "JOINT": "J",
+        "JOINT-MOTION": "JM",
+        "BONE": "B",
+        "BONE-MOTION": "BM",
+    }
+
+    if isinstance(inputs, str):
+        normalized_inputs = inputs.upper()
+        normalized_inputs = alias_map.get(normalized_inputs, normalized_inputs)
+        if normalized_inputs == "JVBM":
+            order = ["J", "JM", "B", "BM"]
+        elif normalized_inputs in streams:
+            order = [normalized_inputs]
+        else:
+            logging.error("Unsupported inputs value: %s", inputs)
+            raise ValueError(f"Unsupported inputs value: {inputs}")
+    elif isinstance(inputs, (list, tuple)):
+        order = [str(item).upper() for item in inputs]
+        order = [alias_map.get(item, item) for item in order]
+    else:
+        order = ["J", "JM", "B", "BM"]
+
+    data_new = []
+    for key in order:
+        if key not in streams:
+            logging.error("Unknown stream key '%s' in inputs %s", key, inputs)
+            raise ValueError(f"Unknown stream key '{key}' in inputs {inputs}")
+        data_new.append(streams[key])
+
+    return np.stack(data_new, axis=0)

@@ -14,6 +14,13 @@ AREA_TO_ID = {
     "unknown": 1,
 }
 
+STREAM_ALIAS_MAP = {
+    "JOINT": "J",
+    "JOINT-MOTION": "JM",
+    "BONE": "B",
+    "BONE-MOTION": "BM",
+}
+
 
 def extract_area_name(clip_name):
     m = re.search(r"(hundidocam\d+|columpios[_]?cam\d+|columpios_tierra)", clip_name)
@@ -42,6 +49,7 @@ class Playground_Feeder(Dataset):
             input_dims=3,
             num_frame=48,
             num_object=0,
+            stream_type=None,
             **kwargs,
     ):
         self.phase = phase
@@ -62,6 +70,10 @@ class Playground_Feeder(Dataset):
 
         self.root_folder = root_folder
         self.object_folder = object_folder or root_folder
+        self.stream_type = stream_type.upper() if stream_type else None
+        self.single_stream = self.stream_type is not None
+        self.stream_order = self._determine_stream_order()
+        self.num_input = 1 if self.single_stream else len(self.stream_order)
 
         data_path = os.path.join(root_folder, f'{phase}_data.npy')
         label_path = os.path.join(root_folder, f'{phase}_label.pkl')
@@ -136,10 +148,11 @@ class Playground_Feeder(Dataset):
         return pose_data, object_clip
 
     def __getitem__(self, idx):
-        pose_data = self.data[idx].copy()  # (T, M, V, C)
+        sample_idx = idx
+        pose_data = self.data[sample_idx].copy()  # (T, M, V, C)
 
         if self.object_data is not None:
-            object_clip = self.object_data[idx].copy()  # (T, O, C)
+            object_clip = self.object_data[sample_idx].copy()  # (T, O, C)
 
             # Apply augmentation only during training
             if self.augmenter.enable:
@@ -177,8 +190,17 @@ class Playground_Feeder(Dataset):
         data = graph_processing(pose_data, self.graph, self.processing)
         data_new = multi_input(data, self.conn, self.inputs, self.center)
 
+        if self.single_stream:
+            stream_map = {"J": 0, "JM": 1, "B": 2, "BM": 3}
+            stream_idx = stream_map.get(self.stream_type)
+            if stream_idx is None:
+                raise ValueError(f"stream_type '{self.stream_type}' not in '{self.stream_order}'")
+            data_new = data_new[stream_idx]
+            if data_new.ndim == len(self.datashape) and data_new.shape[-1] == 1:
+                data_new = data_new.squeeze(-1)
+
         # More robust shape checking with detailed error information
-        expected_shape = self.datashape
+        expected_shape = self.datashape[1:] if self.single_stream else self.datashape
         actual_shape = list(data_new.shape)
 
         if actual_shape != expected_shape:
@@ -208,16 +230,30 @@ class Playground_Feeder(Dataset):
             else:
                 raise ValueError('Critical shape mismatch that cannot be automatically fixed.')
 
-        label, name = self.label[idx]
+        label, name = self.label[sample_idx]
         if self.area_ids is not None:
-            area_id = int(self.area_ids[idx])
+            area_id = int(self.area_ids[sample_idx])
         else:
             area_name = extract_area_name(name)
             area_id = AREA_TO_ID.get(area_name, AREA_TO_ID["unknown"])
         return data_new, label, name, area_id
 
+    def _determine_stream_order(self):
+        if isinstance(self.inputs, str) and self.inputs.upper() == "JVBM":
+            return ["J", "JM", "B", "BM"]
+        if isinstance(self.inputs, (list, tuple)):
+            order = []
+            for item in self.inputs:
+                key = str(item).upper()
+                order.append(STREAM_ALIAS_MAP.get(key, key))
+            return order
+        if isinstance(self.inputs, str):
+            key = self.inputs.upper()
+            return [STREAM_ALIAS_MAP.get(key, key)]
+        return ["J"]
+
     def get_datashape(self):
-        I = len(self.inputs) if self.inputs.isupper() else 1
+        I = self.num_input
         C = self.input_dims if self.inputs in [
             'joint', 'joint-motion', 'bone', 'bone-motion'] else self.input_dims * 2
         T = len(range(*self.window))

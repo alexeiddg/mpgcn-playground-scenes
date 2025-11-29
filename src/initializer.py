@@ -14,6 +14,7 @@ from . import scheduler
 class Initializer():
     def __init__(self, args):
         self.args = args
+        self._resolve_placeholders()
         self.init_save_dir()
 
         logging.info('')
@@ -81,6 +82,11 @@ class Initializer():
             dataset_args['augment'] = False
         self.train_batch_size = dataset_args['train_batch_size']
         self.eval_batch_size = dataset_args['eval_batch_size']
+        root_folder = dataset_args.get('root_folder') if isinstance(dataset_args, dict) else dataset_args.root_folder
+        work_dir = self.args.work_dir
+        if (isinstance(root_folder, str) and "{ID}" in root_folder) or (isinstance(work_dir, str) and "{ID}" in work_dir):
+            raise ValueError("Unresolved {ID} placeholder. fold_id must be provided.")
+
         self.feeders, self.data_shape, self.num_class, self.A, self.parts = dataset.create(
             self.args.dataset, **dataset_args
         )
@@ -96,6 +102,34 @@ class Initializer():
         self.hem_mode = hem_cfg.get("mode", "top_p")
         self.hem_value = hem_cfg.get("value", 0.3)
         self.hem_min_samples = hem_cfg.get("min_samples", 1)
+
+    def _resolve_placeholders(self):
+        # Replace {ID} in work_dir/root/object folders using dataset_args.fold_id or env FOLD_ID.
+        fold_id = None
+        if isinstance(self.args.dataset_args, dict):
+            fold_id = self.args.dataset_args.get("fold_id")
+        else:
+            fold_id = getattr(self.args.dataset_args, "fold_id", None)
+        if fold_id is not None:
+            fold_id = str(fold_id)
+        else:
+            fold_id = os.getenv("FOLD_ID", "")
+        if fold_id == "":
+            raise ValueError("fold_id is required for path placeholders. Set dataset_args.fold_id or export FOLD_ID.")
+
+        def repl(val):
+            if isinstance(val, str) and "{ID}" in val:
+                return val.replace("{ID}", fold_id)
+            return val
+
+        self.args.work_dir = repl(self.args.work_dir)
+        if isinstance(self.args.dataset_args, dict):
+            self.args.dataset_args["root_folder"] = repl(self.args.dataset_args.get("root_folder"))
+            self.args.dataset_args["object_folder"] = repl(self.args.dataset_args.get("object_folder"))
+        else:
+            self.args.dataset_args.root_folder = repl(getattr(self.args.dataset_args, "root_folder", None))
+            self.args.dataset_args.object_folder = repl(getattr(self.args.dataset_args, "object_folder", None))
+
 
         train_labels = []
         for _, y, _, _ in self.feeders['train']:
@@ -123,8 +157,8 @@ class Initializer():
         from torch.utils.data import WeightedRandomSampler
         train_sampler = WeightedRandomSampler(
             weights=sample_weights,
-            num_samples=len(sample_weights),
-            replacement=True
+            num_samples=len(train_labels),
+            replacement=False
         )
 
         self.train_loader = DataLoader(self.feeders['train'],

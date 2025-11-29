@@ -3,7 +3,7 @@ gpus: [0]
 seed: 1
 debug: False
 pretrained_path:
-work_dir: ./workdir
+work_dir: ./workdir/fold_{ID}_B
 
 # Data Loader
 dataset: playground
@@ -15,11 +15,13 @@ dataset_args:
   dilation: 1
   hop: 1
   base: [11, 12]
+  fold_id: "00"
   train_batch_size: 16
   eval_batch_size: 16
   num_frame: 48
   window: [0, 48]
   inputs: JVBM
+  stream_type: B
   part: body
   processing: default
   root_folder: ./workdir/fold_{ID}
@@ -58,3 +60,10 @@ scheduler_args:
     max_epoch: 70
     warm_up: 10
     step_lr: [25, 50]
+
+# Hard Example Mining
+hem:
+  enabled: False
+  mode: top_p
+  value: 0.3
+  min_samples: 1

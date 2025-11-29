@@ -25,6 +25,10 @@ class Processor(Initializer):
             x = x.float().to(self.device)
             y = y.long().to(self.device)
             area_id = area_id.long().to(self.device)
+            if x.dim() == 5:
+                x = x.unsqueeze(1)
+            assert x.dim() == 6, f"Bad data shape {x.shape}"
+            assert area_id.dim() == 1, f"Bad area_id shape {area_id.shape}"
 
             # Calculating Output
             out, _ = self.model(x, area_id)
@@ -89,6 +93,7 @@ class Processor(Initializer):
         self.model.eval()
         start_eval_time = time()
         score = {}
+        all_logits, all_labels, all_names = [], [], []
         with torch.no_grad():
             num_top1, num_top5 = 0, 0
             num_sample, eval_loss = 0, []
@@ -100,6 +105,9 @@ class Processor(Initializer):
                 x = x.float().to(self.device)
                 y = y.long().to(self.device)
                 area_id = area_id.long().to(self.device)
+                if x.dim() == 5:
+                    x = x.unsqueeze(1)
+                assert x.dim() == 6, f"Bad data shape {x.shape}"
 
                 # Calculating Output
                 out, _ = self.model(x, area_id)
@@ -112,6 +120,9 @@ class Processor(Initializer):
                 if save_score:
                     for n, c in zip(name, out.detach().cpu().numpy()):
                         score[n] = c
+                    all_logits.append(out.detach().cpu().numpy())
+                    all_labels.append(y.detach().cpu().numpy())
+                    all_names.extend(name)
 
                 # Calculating Recognition Accuracies
                 num_sample += x.size(0)
@@ -152,12 +163,20 @@ class Processor(Initializer):
             self.scalar_writer.add_scalar(
                 'eval_loss', eval_loss, self.global_step)
 
+        if save_score and all_logits:
+            logits_arr = np.concatenate(all_logits, axis=0)
+            labels_arr = np.concatenate(all_labels, axis=0)
+            names_arr = np.array(all_names)
+            out_dir = self.args.work_dir or self.save_dir
+            os.makedirs(out_dir, exist_ok=True)
+            np.savez(os.path.join(out_dir, 'score_eval.npz'), logits=logits_arr, labels=labels_arr, names=names_arr)
+
         torch.cuda.empty_cache()
 
         return acc_top1, acc_top5, cm, score
 
     def _select_hard_samples(self, per_sample_loss, logits, targets):
-        """Return indices of hard samples according to configured HEM mode."""
+        # Return indices of hard samples according to configured HEM mode.
         mode = getattr(self, "hem_mode", "top_p")
         value = getattr(self, "hem_value", 0.3)
         min_samples = getattr(self, "hem_min_samples", 1)
@@ -301,6 +320,10 @@ class Processor(Initializer):
                 labels.extend(y)
                 x = x.float().to(self.device)
                 area_id = area_id.long().to(self.device)
+                if x.dim() == 5:
+                    x = x.unsqueeze(1)
+                assert x.dim() == 6, f"Bad data shape {x.shape}"
+                assert area_id.dim() == 1, f"Bad area_id shape {area_id.shape}"
 
                 dy, feature = self.model(x, area_id)
                 features.extend(feature.detach().cpu().numpy())
