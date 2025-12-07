@@ -11,6 +11,25 @@ MP-GCN models **interactions**: _intra-person_ (body topology), _person↔object
 - **Paper:** [“Skeleton-based Group Activity Recognition via Spatial-Temporal Panoramic Graph”](https://link.springer.com/chapter/10.1007/978-3-031-73202-7_15)
 
 ---
+## **Our work**
+
+- **Our Research:** [Playground Scene Understanding using
+Multi-Person Graph Convolutional Networks](https://drive.google.com/file/d/1KF8tL09hIDGAQ8455WPxkUGc84YkJJFT/view?usp=sharing)
+
+### **Knowledge bases created**
+- **Presentation Slides:** [MP-GCN Playground](https://drive.google.com/file/d/1DcpNr8efTBVO34-lbSOfKgDQe-lTPmn4/view?usp=sharing)
+- **Understanding MP-GCN:** [Skeleton-based Group Activity Recognition via
+Spatial-Temporal Panoramic Graph](https://drive.google.com/file/d/1evxlVWJxJsMz0F9XLQI75ch02dkHrgRB/view?usp=sharing)
+- **Understanding MP-GCN original Codebase:** [Understanding MP-GCN Codebase](https://drive.google.com/file/d/1WQdDZSIegiMXaEMVaLQW78xKmaY5c600/view?usp=sharing)
+- **MPGCN Data construction:** [MPGCN Data construction](https://drive.google.com/file/d/1KDFllDOOB_muyGMPiBEuKBzzNfU4_fxn/view?usp=sharing)
+
+
+### **Data Created**
+- **.npy Pose-Only Data:** [NPY Files](https://drive.google.com/file/d/19MZTeHAVXPMMVdW9qbT6t5wmJjXsrKAh/view?usp=sharing)
+- **Folds:** [FOLDS](https://drive.google.com/file/d/1L6aLr2j1sGeUcCoFLyacB7zNUH-QbgSh/view?usp=sharing)
+- **Late-Fusion Generated Data:** [Late-fusion folds & eval](https://drive.google.com/file/d/1CCm8bu8vv25-GIoYRiAEU7g9ELWWPT6X/view?usp=sharing)
+- **Full late-fusion workdir w/folds:** [Full fold data](https://drive.google.com/file/d/1HJlgjiJUWzFp_yAwayiAanozoTq7arhm/view?usp=sharing)
+---
 
 # Playground Scenes MP-GCN Customization
 
